@@ -1,0 +1,13 @@
+# The receiver's DPI/profile buttons are reported via the keyboard HID usage
+# page on interface 1, so udev's input_id tags that interface ID_INPUT_KEYBOARD=1.
+# UPower's sibling-discovery type guesser (up-device-supply.c) ranks Keyboard
+# above Mouse unconditionally once any sibling reports it, so the genuine
+# ID_INPUT_MOUSE=1 on interface 0 never wins. Strip the false keyboard tag so
+# UPower is left with only the correct mouse signal.
+#
+# DRIVERS=="keychron" alone is enough to scope this to our own bound
+# interfaces (interface 0's real mouse input has no ID_INPUT_KEYBOARD tag to
+# begin with, so this is a no-op there) — bInterfaceNumber can't be combined
+# with DRIVERS here since they live on different parent devices, and udev
+# only matches parent-device keys against a single common ancestor.
+SUBSYSTEM=="input", DRIVERS=="keychron", ENV{ID_INPUT_KEYBOARD}="0"

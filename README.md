@@ -38,6 +38,8 @@ makepkg -si
 ```bash
 make
 sudo insmod keychron_battery.ko
+sudo install -Dm644 71-keychron-battery.rules /usr/lib/udev/rules.d/
+sudo udevadm control --reload-rules
 ```
 
 ## Usage
@@ -64,6 +66,8 @@ Desktop environments with battery widgets (KDE, GNOME, etc.) will automatically 
 3. Receives battery response (report ID `0xB4`) via USB interrupt endpoint
 4. Polls every 5 minutes to update battery level
 5. Exposes battery via power_supply subsystem → UPower → desktop widget
+
+A udev rule (`71-keychron-battery.rules`) strips the `ID_INPUT_KEYBOARD` tag udev puts on the receiver's DPI/profile-button interface (it reports those buttons on the keyboard HID usage page). Without it, UPower's peripheral-battery type guesser sees that tag alongside the mouse's genuine `ID_INPUT_MOUSE` tag and — by a hard-coded priority order that ranks Keyboard above Mouse — reports the whole device as `Keyboard` instead of `Mouse`.
 
 ## Troubleshooting
 

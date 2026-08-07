@@ -23,4 +23,5 @@ package() {
     install -Dm644 keychron_battery.c "${install_dir}/keychron_battery.c"
     install -Dm644 Makefile "${install_dir}/Makefile"
     install -Dm644 dkms.conf "${install_dir}/dkms.conf"
+    install -Dm644 71-keychron-battery.rules "${pkgdir}/usr/lib/udev/rules.d/71-keychron-battery.rules"
 }
