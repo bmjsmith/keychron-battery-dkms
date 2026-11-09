@@ -30,6 +30,8 @@
 #define KEYCHRON_REPORT_ID_RESP		0xB4
 #define KEYCHRON_CMD_STATUS		0x06
 #define KEYCHRON_BATTERY_OFFSET		20
+#define KEYCHRON_BATTERY_CHARGING	0x80
+#define KEYCHRON_BATTERY_LEVEL		0x7f
 #define KEYCHRON_VENDOR_INTERFACE	4
 
 #define KEYCHRON_POLL_INTERVAL_MS	300000	/* 5 minutes */
@@ -53,7 +55,7 @@ struct keychron_device {
 	struct power_supply_desc battery_desc;
 	struct delayed_work battery_work;
 	struct completion response_received;
-	int battery_capacity;
+	int battery_status;
 	int pending_battery;
 	unsigned long last_reading;
 	bool owns_battery;
@@ -75,23 +77,29 @@ static int keychron_battery_get_property(struct power_supply *psy,
 					 union power_supply_propval *val)
 {
 	struct keychron_device *kdev = power_supply_get_drvdata(psy);
+	int level = kdev->battery_status & KEYCHRON_BATTERY_LEVEL;
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
-		val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+		if (!(kdev->battery_status & KEYCHRON_BATTERY_CHARGING))
+			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+		else if (level == 100)
+			val->intval = POWER_SUPPLY_STATUS_FULL;
+		else
+			val->intval = POWER_SUPPLY_STATUS_CHARGING;
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
 		val->intval = 1;
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
-		val->intval = kdev->battery_capacity;
+		val->intval = level;
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
-		if (kdev->battery_capacity >= 80)
+		if (level >= 80)
 			val->intval = POWER_SUPPLY_CAPACITY_LEVEL_HIGH;
-		else if (kdev->battery_capacity >= 40)
+		else if (level >= 40)
 			val->intval = POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
-		else if (kdev->battery_capacity >= 10)
+		else if (level >= 10)
 			val->intval = POWER_SUPPLY_CAPACITY_LEVEL_LOW;
 		else
 			val->intval = POWER_SUPPLY_CAPACITY_LEVEL_CRITICAL;
@@ -111,6 +119,13 @@ static int keychron_battery_get_property(struct power_supply *psy,
 	return 0;
 }
 
+static void keychron_log_battery(struct keychron_device *kdev)
+{
+	hid_info(kdev->hdev, "Keychron mouse battery: %d%%%s\n",
+		 kdev->battery_status & KEYCHRON_BATTERY_LEVEL,
+		 kdev->battery_status & KEYCHRON_BATTERY_CHARGING ? " (charging)" : "");
+}
+
 static int keychron_raw_event(struct hid_device *hdev,
 			      struct hid_report *report, u8 *data, int size)
 {
@@ -123,7 +138,7 @@ static int keychron_raw_event(struct hid_device *hdev,
 	if (size >= KEYCHRON_BATTERY_OFFSET + 1 &&
 	    data[0] == KEYCHRON_REPORT_ID_RESP &&
 	    data[1] == KEYCHRON_CMD_STATUS &&
-	    data[KEYCHRON_BATTERY_OFFSET] <= 100) {
+	    (data[KEYCHRON_BATTERY_OFFSET] & KEYCHRON_BATTERY_LEVEL) <= 100) {
 		kdev->pending_battery = data[KEYCHRON_BATTERY_OFFSET];
 		atomic_set(&kdev->waiting_response, 0);
 		complete(&kdev->response_received);
@@ -255,12 +270,14 @@ static void keychron_battery_work(struct work_struct *work)
 					      msecs_to_jiffies(KEYCHRON_RETRY_POLL_MS));
 			return;
 		}
-		kdev->battery_capacity = battery;
-		hid_info(kdev->hdev, "Keychron mouse battery: %d%%\n", battery);
-	} else if (battery != kdev->battery_capacity) {
-		kdev->battery_capacity = battery;
+		kdev->battery_status = battery;
+		keychron_log_battery(kdev);
+	} else if (battery != kdev->battery_status) {
+		kdev->battery_status = battery;
 		power_supply_changed(kdev->battery);
-		hid_dbg(kdev->hdev, "battery: %d%%\n", battery);
+		hid_dbg(kdev->hdev, "battery: %d%%%s\n",
+			battery & KEYCHRON_BATTERY_LEVEL,
+			battery & KEYCHRON_BATTERY_CHARGING ? " (charging)" : "");
 	}
 	kdev->last_reading = jiffies;
 
@@ -300,7 +317,7 @@ static int keychron_probe(struct hid_device *hdev,
 		return -ENOMEM;
 
 	kdev->hdev = hdev;
-	kdev->battery_capacity = 0;
+	kdev->battery_status = 0;
 	kdev->owns_battery = false;
 	init_completion(&kdev->response_received);
 	atomic_set(&kdev->waiting_response, 0);
@@ -354,9 +371,9 @@ static int keychron_probe(struct hid_device *hdev,
 			hid_hw_stop(hdev);
 			return ret;
 		}
-		kdev->battery_capacity = battery;
+		kdev->battery_status = battery;
 		kdev->last_reading = jiffies;
-		hid_info(hdev, "Keychron mouse battery: %d%%\n", battery);
+		keychron_log_battery(kdev);
 		schedule_delayed_work(&kdev->battery_work,
 				      msecs_to_jiffies(KEYCHRON_POLL_INTERVAL_MS));
 	} else {
