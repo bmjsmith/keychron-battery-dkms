@@ -34,6 +34,7 @@
 
 #define KEYCHRON_POLL_INTERVAL_MS	300000	/* 5 minutes */
 #define KEYCHRON_RETRY_POLL_MS		60000	/* 1 minute, while mouse not yet responding */
+#define KEYCHRON_STALE_MS		900000
 #define KEYCHRON_RESPONSE_TIMEOUT_MS	500
 #define KEYCHRON_REPORT_SIZE		64
 #define KEYCHRON_QUERY_RETRIES		3
@@ -54,6 +55,7 @@ struct keychron_device {
 	struct completion response_received;
 	int battery_capacity;
 	int pending_battery;
+	unsigned long last_reading;
 	bool owns_battery;
 	atomic_t waiting_response;
 };
@@ -233,6 +235,14 @@ static void keychron_battery_work(struct work_struct *work)
 	 * miss leaves the battery unreported for the whole session.
 	 */
 	if (battery < 0) {
+		if (kdev->battery &&
+		    time_after(jiffies, kdev->last_reading +
+				       msecs_to_jiffies(KEYCHRON_STALE_MS))) {
+			power_supply_unregister(kdev->battery);
+			kdev->battery = NULL;
+			hid_info(kdev->hdev, "no battery reading for %d minutes, unregistering until the mouse responds\n",
+				 KEYCHRON_STALE_MS / 60000);
+		}
 		schedule_delayed_work(&kdev->battery_work,
 				      msecs_to_jiffies(KEYCHRON_RETRY_POLL_MS));
 		return;
@@ -252,6 +262,7 @@ static void keychron_battery_work(struct work_struct *work)
 		power_supply_changed(kdev->battery);
 		hid_dbg(kdev->hdev, "battery: %d%%\n", battery);
 	}
+	kdev->last_reading = jiffies;
 
 	schedule_delayed_work(&kdev->battery_work,
 			      msecs_to_jiffies(KEYCHRON_POLL_INTERVAL_MS));
@@ -344,6 +355,7 @@ static int keychron_probe(struct hid_device *hdev,
 			return ret;
 		}
 		kdev->battery_capacity = battery;
+		kdev->last_reading = jiffies;
 		hid_info(hdev, "Keychron mouse battery: %d%%\n", battery);
 		schedule_delayed_work(&kdev->battery_work,
 				      msecs_to_jiffies(KEYCHRON_POLL_INTERVAL_MS));
